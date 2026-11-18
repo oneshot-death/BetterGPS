@@ -1,0 +1,12 @@
+numpy
+pandas
+scipy
+matplotlib
+seaborn
+geopandas
+shapely
+pyproj
+folium
+networkx
+jupyter
+notebook
