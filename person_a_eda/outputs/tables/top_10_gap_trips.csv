@@ -1,0 +1,11 @@
+partition,trip_id,gps_points,gap_count,total_missing_seconds,maximum_gap_seconds
+train,98,5584,1268,1611.0,50.0
+train,81,3224,903,5258.0,536.0
+train,78,2909,712,54928.0,52810.0
+train,46,1401,529,900.0,22.0
+train,4,1064,491,4154.0,51.0
+train,33,5844,407,409.0,3.0
+train,25,1179,361,361.0,2.0
+train,90,536,224,153495.0,153064.0
+train,22,474,222,964.0,22.0
+student_test,76,1486,206,781.0,32.0
