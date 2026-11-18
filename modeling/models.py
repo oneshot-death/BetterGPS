@@ -86,5 +86,13 @@ def final_estimator(model):
 
 
 def describe(model):
-    """Compact one-line description of the non-default configuration (for logs/report)."""
-    return " ".join(repr(final_estimator(model)).split())
+    """Compact one-line description: only parameters that differ from the library defaults."""
+    est = final_estimator(model)
+    try:
+        default = type(est)().get_params()
+        changed = {k: v for k, v in est.get_params().items()
+                   if k not in ("n_jobs", "verbose") and repr(default.get(k)) != repr(v)}
+        args = ", ".join(f"{k}={v!r}" for k, v in sorted(changed.items()))
+        return f"{type(est).__name__}({args})"
+    except Exception:
+        return " ".join(repr(est).split())
