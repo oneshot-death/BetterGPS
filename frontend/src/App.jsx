@@ -276,6 +276,83 @@ function calculateOutlierStats(records) {
   }
 }
 
+
+// Read whitespace- or comma-separated numeric files used by the backend.
+function parseNumericFile(content, expectedColumns, fileLabel) {
+  const lines = String(content)
+    .trim()
+    .split(/\r?\n/)
+    .filter(line => line.trim())
+
+  if (lines.length === 0) {
+    throw new Error(`${fileLabel} file is empty.`)
+  }
+
+  return lines.map((line, index) => {
+    const values = line.trim().split(/[,\s]+/).map(Number)
+
+    if (
+      values.length < expectedColumns ||
+      values.slice(0, expectedColumns).some(value => !Number.isFinite(value))
+    ) {
+      throw new Error(`Invalid data in ${fileLabel} file at line ${index + 1}.`)
+    }
+
+    return values.slice(0, expectedColumns)
+  })
+}
+
+// Convert backend arc IDs into separate Leaflet [latitude, longitude] paths.
+// A null arc marks a break between disconnected route segments.
+function buildPredictedRoute(predictedArcs, nodes, arcs) {
+  const routeSegments = []
+  let currentSegment = []
+
+  const addPoint = point => {
+    const previous = currentSegment[currentSegment.length - 1]
+    if (!previous || previous[0] !== point[0] || previous[1] !== point[1]) {
+      currentSegment.push(point)
+    }
+  }
+
+  const finishSegment = () => {
+    if (currentSegment.length > 1) routeSegments.push(currentSegment)
+    currentSegment = []
+  }
+
+  for (const rawArcId of predictedArcs) {
+    if (rawArcId === null) {
+      finishSegment()
+      continue
+    }
+
+    const arcId = Number(rawArcId)
+    if (!Number.isInteger(arcId) || arcId < 0 || arcId >= arcs.length) {
+      throw new Error(`Backend returned an invalid road arc ID: ${rawArcId}`)
+    }
+
+    const [fromNode, toNode] = arcs[arcId]
+    if (
+      !Number.isInteger(fromNode) ||
+      !Number.isInteger(toNode) ||
+      !nodes[fromNode] ||
+      !nodes[toNode]
+    ) {
+      throw new Error(`Road arc ${arcId} refers to a missing node.`)
+    }
+
+    const [fromLongitude, fromLatitude] = nodes[fromNode]
+    const [toLongitude, toLatitude] = nodes[toNode]
+
+    // Leaflet coordinates are [latitude, longitude].
+    addPoint([fromLatitude, fromLongitude])
+    addPoint([toLatitude, toLongitude])
+  }
+
+  finishSegment()
+  return routeSegments
+}
+
 function App() {
   const [active, setActive] = useState('Dashboard')
   const [mobileMenu, setMobileMenu] = useState(false)
@@ -288,6 +365,13 @@ function App() {
   const [originalRecords, setOriginalRecords] = useState([])
   const [showCleaned, setShowCleaned] = useState(false)
   const [message, setMessage] = useState('')
+
+  // Backend map-matching integration
+  const [nodesFile, setNodesFile] = useState(null)
+  const [arcsFile, setArcsFile] = useState(null)
+  const [prediction, setPrediction] = useState(null)
+  const [predictionLoading, setPredictionLoading] = useState(false)
+  const [predictionError, setPredictionError] = useState('')
 
   const center = useMemo(() => {
     if (!tripPoints.length) return [12.9345, 77.5345]
@@ -348,6 +432,8 @@ function App() {
         const detectedOutliers = calculateOutlierStats(records)
 
         setFile(selected)
+        setPrediction(null)
+        setPredictionError('')
         setTripPoints(points)
         setTripStats(stats)
         setGapStats(detectedGaps)
@@ -372,6 +458,115 @@ function App() {
 
     reader.readAsText(selected)
     event.target.value = ''
+  }
+
+
+  function handleNetworkFileUpload(event, expectedExtension, setSelectedFile) {
+    const selected = event.target.files?.[0]
+    if (!selected) return
+
+    if (!selected.name.toLowerCase().endsWith(expectedExtension)) {
+      setPredictionError(`Please select a valid ${expectedExtension} file.`)
+      event.target.value = ''
+      return
+    }
+
+    setSelectedFile(selected)
+    setPrediction(null)
+    setPredictionError('')
+    event.target.value = ''
+  }
+
+  async function handleRunPrediction() {
+    if (!file || !nodesFile || !arcsFile) {
+      setPredictionError('Please upload the .track, .nodes and .arcs files first.')
+      return
+    }
+
+    setPredictionLoading(true)
+    setPredictionError('')
+    setPrediction(null)
+
+    try {
+      const [trackText, nodesText, arcsText] = await Promise.all([
+        file.text(),
+        nodesFile.text(),
+        arcsFile.text(),
+      ])
+
+      const trackRows = parseNumericFile(trackText, 3, '.track')
+      const nodeRows = parseNumericFile(nodesText, 2, '.nodes')
+      const arcRows = parseNumericFile(arcsText, 2, '.arcs')
+
+      const track = trackRows.map(([longitude, latitude, timestamp]) => {
+        if (Math.abs(longitude) > 180 || Math.abs(latitude) > 90) {
+          throw new Error('The .track file contains coordinates outside valid ranges.')
+        }
+        return { longitude, latitude, timestamp }
+      })
+
+      const nodes = nodeRows.map(([longitude, latitude]) => {
+        if (Math.abs(longitude) > 180 || Math.abs(latitude) > 90) {
+          throw new Error('The .nodes file contains coordinates outside valid ranges.')
+        }
+        return { longitude, latitude }
+      })
+
+      const arcs = arcRows.map(([from_node, to_node]) => {
+        if (
+          !Number.isInteger(from_node) ||
+          !Number.isInteger(to_node) ||
+          from_node < 0 ||
+          to_node < 0 ||
+          from_node >= nodes.length ||
+          to_node >= nodes.length
+        ) {
+          throw new Error('The .arcs file contains a node index that does not exist.')
+        }
+        return { from_node, to_node }
+      })
+
+      const tripId = file.name.replace(/\.track$/i, '')
+
+      const response = await fetch('/predict', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ trip_id: tripId, track, nodes, arcs }),
+      })
+
+      const responseData = await response.json().catch(() => ({}))
+
+      if (!response.ok) {
+        throw new Error(
+          responseData.detail ||
+          responseData.message ||
+          `Prediction request failed with HTTP ${response.status}.`
+        )
+      }
+
+      // Accept either a directly returned prediction or a nested result object.
+      const result = responseData.result || responseData.prediction || responseData
+
+      if (!Array.isArray(result.predicted_arcs)) {
+        throw new Error('The backend response did not contain a predicted_arcs array.')
+      }
+
+      const routeSegments = buildPredictedRoute(result.predicted_arcs, nodeRows, arcRows)
+
+      if (routeSegments.length === 0) {
+        throw new Error('The backend returned no drawable route segments.')
+      }
+
+      setPrediction({
+        ...result,
+        routeSegments,
+      })
+    } catch (error) {
+      console.error('Map-matching request failed:', error)
+      setPredictionError(error.message || 'Unable to run map matching.')
+    } finally {
+      setPredictionLoading(false)
+    }
   }
 
   const statDistance = tripStats
@@ -575,6 +770,12 @@ function App() {
 
               <div className="map-legend">
                 <span><i className="legend-blue" /> GPS trajectory</span>
+                {prediction && (
+                  <span>
+                    <i style={{ display: 'inline-block', width: 18, height: 4, background: '#8b5cf6', borderRadius: 4, marginRight: 6 }} />
+                    Predicted road route
+                  </span>
+                )}
                 <span><i className="legend-green" /> Start point</span>
                 {outlierStats && outlierStats.count > 0 && (
                   <span><i style={{ display: 'inline-block', width: 9, height: 9, borderRadius: '50%', background: '#e45b5b', marginRight: 6 }} /> Suspicious point</span>
@@ -601,6 +802,18 @@ function App() {
                       opacity: 0.9
                     }}
                   />
+
+                  {prediction?.routeSegments.map((segment, index) => (
+                    <Polyline
+                      key={`predicted-route-${index}`}
+                      positions={segment}
+                      pathOptions={{
+                        color: '#8b5cf6',
+                        weight: 5,
+                        opacity: 0.95
+                      }}
+                    />
+                  ))}
 
                   {showCleaned && cleanedPoints.length > 1 && (
                     <Polyline
@@ -683,12 +896,12 @@ function App() {
 
             <div className="right-column">
 
-              {/* Upload Card */}
+              {/* Upload Card and backend map-matching controls */}
               <div className="panel upload-panel">
                 <div className="panel-heading">
                   <div>
-                    <h3>Upload trajectory</h3>
-                    <p>Select your GPS track file</p>
+                    <h3>Map Matching Input</h3>
+                    <p>Upload the three files required by the backend</p>
                   </div>
                   <Upload size={20} />
                 </div>
@@ -696,7 +909,7 @@ function App() {
                 <label className="drop-zone">
                   <div className="upload-circle"><FileUp size={24} /></div>
                   <strong>{file ? file.name : 'Choose a .track file'}</strong>
-                  <span>Click to browse your files</span>
+                  <span>GPS coordinates and timestamps</span>
                   <input
                     type="file"
                     accept=".track"
@@ -705,9 +918,58 @@ function App() {
                   />
                 </label>
 
+                <label className="drop-zone" style={{ marginTop: 10 }}>
+                  <div className="upload-circle"><FileUp size={24} /></div>
+                  <strong>{nodesFile ? nodesFile.name : 'Choose a .nodes file'}</strong>
+                  <span>{nodesFile ? 'Road nodes selected' : 'Road network node coordinates'}</span>
+                  <input
+                    type="file"
+                    accept=".nodes"
+                    onChange={event => handleNetworkFileUpload(event, '.nodes', setNodesFile)}
+                    hidden
+                  />
+                </label>
+
+                <label className="drop-zone" style={{ marginTop: 10 }}>
+                  <div className="upload-circle"><FileUp size={24} /></div>
+                  <strong>{arcsFile ? arcsFile.name : 'Choose an .arcs file'}</strong>
+                  <span>{arcsFile ? 'Road arcs selected' : 'Connections between road nodes'}</span>
+                  <input
+                    type="file"
+                    accept=".arcs"
+                    onChange={event => handleNetworkFileUpload(event, '.arcs', setArcsFile)}
+                    hidden
+                  />
+                </label>
+
+                <button
+                  type="button"
+                  className="primary-button"
+                  style={{ width: '100%', justifyContent: 'center', marginTop: 14 }}
+                  onClick={handleRunPrediction}
+                  disabled={!file || !nodesFile || !arcsFile || predictionLoading}
+                >
+                  {predictionLoading ? 'Running map matching...' : 'Run Map Matching'}
+                </button>
+
                 <div className="file-note">
-                  Format: longitude, latitude, timestamp
+                  .track: longitude, latitude, timestamp · .nodes: longitude, latitude · .arcs: from_node, to_node
                 </div>
+
+                {predictionError && (
+                  <p role="alert" style={{ color: '#c24141', fontSize: 13, marginTop: 10 }}>
+                    {predictionError}
+                  </p>
+                )}
+
+                {prediction && (
+                  <div className="trip-details" style={{ marginTop: 12 }}>
+                    <p><strong>Prediction:</strong> Complete</p>
+                    <p><strong>Method:</strong> {prediction.prediction_method || 'XGBoost + HMM/Viterbi'}</p>
+                    <p><strong>Predicted road arcs:</strong> {prediction.predicted_arcs.filter(arc => arc !== null).length.toLocaleString()}</p>
+                    <p><strong>Route segments:</strong> {prediction.routeSegments.length}</p>
+                  </div>
+                )}
               </div>
 
               {/* Trip Information */}
