@@ -1,0 +1,9 @@
+numpy
+pandas
+scikit-learn>=1.4
+matplotlib
+joblib
+optuna
+# optional extra models (picked up automatically if installed)
+lightgbm
+xgboost
