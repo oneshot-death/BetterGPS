@@ -1,0 +1,49 @@
+{
+  "model_tag": "xgboost",
+  "beta": 5.0,
+  "emission_weight": 0.5,
+  "max_gap_s": 30.0,
+  "tune_trips": [
+    "00000006",
+    "00000008",
+    "00000012",
+    "00000018",
+    "00000035",
+    "00000044",
+    "00000045",
+    "00000047",
+    "00000050",
+    "00000058",
+    "00000066",
+    "00000070",
+    "00000074",
+    "00000081",
+    "00000083",
+    "00000084",
+    "00000088",
+    "00000092",
+    "00000093",
+    "00000098"
+  ],
+  "student_test_classifier_only": {
+    "top1": 0.859446764091858,
+    "route_continuity": 0.7730560578661845,
+    "route_precision_mean": 0.8544925458722288,
+    "route_recall_mean": 0.9766487167168465,
+    "route_f1_mean": 0.9091629123760534
+  },
+  "student_test_hmm": {
+    "top1": 0.9138308977035491,
+    "route_continuity": 0.9018733273862622,
+    "route_precision_mean": 0.9742651694277427,
+    "route_recall_mean": 0.9822342823249286,
+    "route_f1_mean": 0.9780992628389097
+  },
+  "student_test_hmm_full_route": {
+    "route_continuity": 1.0,
+    "route_precision_mean": 0.9701320456564174,
+    "route_recall_mean": 0.9970845647563733,
+    "route_f1_mean": 0.9832808930822294,
+    "breaks_total": 5
+  }
+}

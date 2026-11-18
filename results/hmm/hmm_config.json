@@ -1,0 +1,9 @@
+{
+  "beta": 5.0,
+  "emission_weight": 0.5,
+  "max_gap_s": 30.0,
+  "route_factor": 2.0,
+  "route_slack_m": 300.0,
+  "backtrack_tol_m": 15.0,
+  "model_tag": "xgboost"
+}
